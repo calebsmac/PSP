@@ -29,8 +29,14 @@ target_compile_definitions(psp-${CFE_SYSTEM_PSPNAME}-impl PRIVATE
 
 target_include_directories(psp-${CFE_PSP_TARGETNAME}-impl PRIVATE
     inc
-    ${NOSENGINE_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../apps/hwlib/sim/inc
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../osal/src/os/nos/inc
     $<TARGET_PROPERTY:psp_module_api,INTERFACE_INCLUDE_DIRECTORIES>
 )
+
+# NOS Engine headers are third-party: include them as system headers, as they
+# are when installed in /usr/include (the Linux image), so the strict FSW
+# warnings do not apply to them when they live elsewhere (e.g. on macOS)
+if (NOSENGINE_INCLUDE_DIRS)
+    target_include_directories(psp-${CFE_PSP_TARGETNAME}-impl SYSTEM PRIVATE ${NOSENGINE_INCLUDE_DIRS})
+endif ()
