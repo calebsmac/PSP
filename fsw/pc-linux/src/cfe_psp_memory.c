@@ -44,6 +44,10 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <fcntl.h>
+#ifdef __APPLE__
+#include <mach-o/getsect.h>
+#include <mach-o/ldsyms.h>
+#endif
 
 /*
 ** cFE includes
@@ -93,8 +97,10 @@ void CFE_PSP_InitUserReservedArea(void);
 /*
 **  External Declarations
 */
+#ifndef __APPLE__
 extern unsigned int _init;
 extern unsigned int _fini;
+#endif
 
 /*
 ** Global variables
@@ -792,10 +798,24 @@ int32 CFE_PSP_GetCFETextSegmentInfo(cpuaddr *PtrToCFESegment, uint32 *SizeOfCFES
     }
     else
     {
+#ifdef __APPLE__
+        /*
+         * Mach-O has no _init/_fini symbols: report the executable's
+         * __TEXT,__text section (getsectiondata() applies the ASLR slide).
+         */
+        unsigned long text_size = 0;
+        uint8_t *     text_addr = getsectiondata(&_mh_execute_header, "__TEXT", "__text", &text_size);
+
+        *PtrToCFESegment  = (cpuaddr)text_addr;
+        *SizeOfCFESegment = (uint32)text_size;
+
+        return_code = (text_addr != NULL) ? CFE_PSP_SUCCESS : CFE_PSP_ERROR;
+#else
         *PtrToCFESegment  = (cpuaddr)(&_init);
         *SizeOfCFESegment = (uint32)(((cpuaddr)&_fini) - ((cpuaddr)&_init));
 
         return_code = CFE_PSP_SUCCESS;
+#endif
     }
 
     return return_code;

@@ -86,8 +86,10 @@
 #define ENGINE_SERVER_URI       "tcp://nos-engine-server:12000"
 #define ENGINE_BUS_NAME         "command"
 #define TICKS_PER_SECOND        100
+/* If set, overrides ENGINE_SERVER_URI here and in hwlib's nos_link.c */
+#define ENGINE_SERVER_URI_ENV   "NOS_ENGINE_SERVER_URI"
 NE_Bus          *CFE_PSP_Bus;
-pthread_mutex_t  CFE_PSP_sim_time_mutex;
+pthread_mutex_t  CFE_PSP_sim_time_mutex = PTHREAD_MUTEX_INITIALIZER; /* a zeroed mutex is invalid on Darwin */
 NE_SimTime       CFE_PSP_sim_time;
 int64_t          CFE_PSP_ticks_per_second;
 extern void NOS_timer_fire(NE_SimTime time);
@@ -316,7 +318,18 @@ void OS_Application_Startup(void)
    /*
    ** Set the NOS Engine Timer Tick Callback
    */
-   CFE_PSP_Bus = NE_create_bus(hub, ENGINE_BUS_NAME, ENGINE_SERVER_URI);
+   {
+      const char *engine_uri = getenv(ENGINE_SERVER_URI_ENV);
+      if (engine_uri == NULL || engine_uri[0] == 0)
+      {
+         engine_uri = ENGINE_SERVER_URI;
+      }
+      else
+      {
+         OS_printf("CFE_PSP: NOS Engine server %s (from %s)\n", engine_uri, ENGINE_SERVER_URI_ENV);
+      }
+      CFE_PSP_Bus = NE_create_bus(hub, ENGINE_BUS_NAME, engine_uri);
+   }
    NE_bus_add_time_tick_callback(CFE_PSP_Bus, CFE_PSP_NosTickCallback);
 
    /*
