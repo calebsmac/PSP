@@ -70,6 +70,111 @@
 #define CFE_PSP_RESET_KEY_FILE    ".resetkeyfile"
 #define CFE_PSP_RESERVED_KEY_FILE ".reservedkeyfile"
 
+#ifdef __APPLE__
+/*
+ * macOS allows 4 MB of System V shared memory in all (kern.sysv.shmall),
+ * which two cFE instances already exceed, and raising it needs root. On
+ * macOS the three reserved areas live in their key files instead, mapped
+ * MAP_SHARED: like the segments they keep their contents across restarts
+ * (processor resets), and they belong to the working directory, so cFE
+ * instances started from different directories never share them. The
+ * functions below stand in for ftok/shmget/shmat/shmctl in this file only;
+ * a key is an index into the table of key files.
+ */
+#include <errno.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+
+#define CFE_PSP_DARWIN_AREAS 4
+static struct
+{
+    const char *Path;
+    void       *Addr;
+    size_t      Size;
+} CFE_PSP_DarwinArea[CFE_PSP_DARWIN_AREAS];
+
+static key_t CFE_PSP_Darwin_ftok(const char *path, int id)
+{
+    key_t k;
+    (void)id;
+    for (k = 0; k < CFE_PSP_DARWIN_AREAS; k++)
+    {
+        if (CFE_PSP_DarwinArea[k].Path == NULL || strcmp(CFE_PSP_DarwinArea[k].Path, path) == 0)
+        {
+            CFE_PSP_DarwinArea[k].Path = path;
+            return k + 1;
+        }
+    }
+    errno = ENOSPC;
+    return -1;
+}
+
+static int CFE_PSP_Darwin_shmget(key_t key, size_t size, int flags)
+{
+    struct stat st;
+    void       *addr;
+    int         fd;
+    (void)flags;
+    if (key < 1 || key > CFE_PSP_DARWIN_AREAS || CFE_PSP_DarwinArea[key - 1].Path == NULL)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+    fd = open(CFE_PSP_DarwinArea[key - 1].Path, O_RDWR | O_CREAT, 0644);
+    if (fd < 0)
+    {
+        return -1;
+    }
+    /* A new file reads as zeros, as a new segment does; an existing one keeps
+       what the previous run left. */
+    if (fstat(fd, &st) != 0 || ((size_t)st.st_size < size && ftruncate(fd, (off_t)size) != 0))
+    {
+        close(fd);
+        return -1;
+    }
+    addr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (addr == MAP_FAILED)
+    {
+        return -1;
+    }
+    CFE_PSP_DarwinArea[key - 1].Addr = addr;
+    CFE_PSP_DarwinArea[key - 1].Size = size;
+    return (int)key;
+}
+
+static void *CFE_PSP_Darwin_shmat(int id, const void *addr, int flags)
+{
+    (void)addr;
+    (void)flags;
+    if (id < 1 || id > CFE_PSP_DARWIN_AREAS || CFE_PSP_DarwinArea[id - 1].Addr == NULL)
+    {
+        errno = EINVAL;
+        return (void *)(-1);
+    }
+    return CFE_PSP_DarwinArea[id - 1].Addr;
+}
+
+/* IPC_RMID: the next run starts from zeros, as from a new segment. */
+static int CFE_PSP_Darwin_shmctl(int id, int cmd, struct shmid_ds *buf)
+{
+    (void)buf;
+    if (id < 1 || id > CFE_PSP_DARWIN_AREAS || cmd != IPC_RMID || CFE_PSP_DarwinArea[id - 1].Addr == NULL)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+    munmap(CFE_PSP_DarwinArea[id - 1].Addr, CFE_PSP_DarwinArea[id - 1].Size);
+    CFE_PSP_DarwinArea[id - 1].Addr = NULL;
+    return truncate(CFE_PSP_DarwinArea[id - 1].Path, 0);
+}
+
+#define ftok   CFE_PSP_Darwin_ftok
+#define shmget CFE_PSP_Darwin_shmget
+#define shmat  CFE_PSP_Darwin_shmat
+#define shmctl CFE_PSP_Darwin_shmctl
+#endif
+
 #include "target_config.h"
 
 /*
